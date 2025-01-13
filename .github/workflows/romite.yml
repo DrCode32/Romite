@@ -13,11 +13,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Java
+      - name: Set up Java 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'  # Changed to Java 21
 
       - name: Get Latest Releases
         id: get-releases
@@ -39,7 +39,7 @@ jobs:
           # Get previous versions from a file or set to empty if file doesn't exist
           if [ -f versions.txt ]; then
             source versions.txt
-          else
+          else:
             cromite_prev=""
             chromext_prev=""
             lspatch_prev=""
