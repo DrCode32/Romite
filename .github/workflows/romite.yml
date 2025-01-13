@@ -1,0 +1,99 @@
+name: Romite
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-and-patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Get Latest Releases
+        id: get-releases
+        run: |
+          # Function to get latest version from a GitHub repo
+          get_latest_version() {
+            curl -s "https://api.github.com/repos/$1/releases/latest" | jq -r '.tag_name'
+          }
+
+          # Get latest versions
+          cromite_version=$(get_latest_version "uazo/cromite")
+          chromext_version=$(get_latest_version "JingMatrix/ChromeXt")
+          lspatch_version=$(get_latest_version "JingMatrix/LSPatch")
+
+          echo "cromite_version=$cromite_version" >> $GITHUB_OUTPUT
+          echo "chromext_version=$chromext_version" >> $GITHUB_OUTPUT
+          echo "lspatch_version=$lspatch_version" >> $GITHUB_OUTPUT
+
+          # Get previous versions from a file or set to empty if file doesn't exist
+          if [ -f versions.txt ]; then
+            source versions.txt
+          else
+            cromite_prev=""
+            chromext_prev=""
+            lspatch_prev=""
+          fi
+          echo "cromite_prev=$cromite_prev" >> $GITHUB_OUTPUT
+          echo "chromext_prev=$chromext_prev" >> $GITHUB_OUTPUT
+          echo "lspatch_prev=$lspatch_prev" >> $GITHUB_OUTPUT
+
+      - name: Check for New Versions and Download Files
+        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+        run: |
+          # Function to download file from a GitHub release
+          download_file() {
+            curl -s "https://api.github.com/repos/$1/releases/latest" | jq -r --arg filename "$2" '.assets[] | select(.name == $filename) | .browser_download_url' | xargs curl -L -o "$2"
+          }
+
+          # Download files if new version
+          if [ "${{ steps.get-releases.outputs.cromite_version }}" != "${{ steps.get-releases.outputs.cromite_prev }}" ]; then
+            download_file "uazo/cromite" "x64_ChromePublic.apk"
+          fi
+          if [ "${{ steps.get-releases.outputs.chromext_version }}" != "${{ steps.get-releases.outputs.chromext_prev }}" ]; then
+            download_file "JingMatrix/ChromeXt" "ChromeXt-signed.apk"
+          fi
+          if [ "${{ steps.get-releases.outputs.lspatch_version }}" != "${{ steps.get-releases.outputs.lspatch_prev }}" ]; then
+            download_file "JingMatrix/LSPatch" "lspatch.jar"
+          fi
+
+      - name: Run LSPatch
+        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+        run: |
+          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex > lspatch_output.txt
+          echo "::notice file=lspatch_output.txt::LSPatch output:"
+          cat lspatch_output.txt
+
+      - name: Upload LSPatch Output as Artifact
+        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+        uses: actions/upload-artifact@v3
+        with:
+          name: lspatch-output
+          path: lspatch_output.txt
+          retention-days: 5
+
+      - name: Save Current Versions
+        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+        run: |
+          echo "cromite_prev=${{ steps.get-releases.outputs.cromite_version }}" > versions.txt
+          echo "chromext_prev=${{ steps.get-releases.outputs.chromext_version }}" >> versions.txt
+          echo "lspatch_prev=${{ steps.get-releases.outputs.lspatch_version }}" >> versions.txt
+
+      - name: Commit version changes
+        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add versions.txt
+          git commit -m "Update versions"
+          git push
