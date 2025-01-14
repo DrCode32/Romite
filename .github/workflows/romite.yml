@@ -66,7 +66,7 @@ jobs:
           cd work_dir
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
           # Find the output APK
-          OUTPUT_APK=$(x64_ChromePublic-430-lspatched.apk)
+          OUTPUT_APK=$(/home/runner/work/Romite/Romite/work_dir/./x64_ChromePublic-430-lspatched.apk)
           if [ -z "$OUTPUT_APK" ]; then
             echo "Error: Could not find lspatched APK file"
             exit 1
