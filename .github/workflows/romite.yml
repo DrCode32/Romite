@@ -30,7 +30,6 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven'  # Enable caching
 
       - name: Initialize and Get Previous Release Info
         id: prev_info
