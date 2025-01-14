@@ -23,10 +23,10 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Download Assets and Patch
+- name: Download Assets and Patch
         run: |
           REPO="${GITHUB_REPOSITORY}"
-          RELEASE_TAG="${github.event.release.tag_name}"
+          RELEASE_TAG="$GITHUB_EVENT_RELEASE_TAG_NAME"
           echo "Checking repository: $REPO, Release Tag: $RELEASE_TAG"
 
           # Function to download a specific asset if it exists
@@ -56,8 +56,10 @@ jobs:
                 java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
                 OUTPUT_APK="Patched_ChromePublic.apk"
                 mv "x64_ChromePublic_patched.apk" "$OUTPUT_APK"
+                echo "::set-output name=patch_status::success" # Set output to indicate success
               else
                 echo "ChromeXt-signed.apk or lspatch.jar not found, skipping patching for uazo/cromite"
+                echo "::set-output name=patch_status::failure" # Set output to indicate failure
               fi
             fi
           fi
@@ -71,12 +73,13 @@ jobs:
           if [[ "$REPO" == "JingMatrix/LSPatch" ]]; then
             echo "New release in JingMatrix/LSPatch, no patching action needed here."
           fi
+        id: download_assets_and_patch
 
       - name: Upload Patched APK to Release Assets
-        if: steps.download_assets_and_patch.outcome == 'success' && env.OUTPUT_APK  # Only upload if patching was successful and output APK exists
+        if: steps.download_assets_and_patch.outputs.patch_status == 'success'  # Only upload if patching was successful
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ${{ env.OUTPUT_APK }}
-          asset_name: ${{ env.OUTPUT_APK }}
+          asset_path: Patched_ChromePublic.apk
+          asset_name: Patched_ChromePublic.apk
           asset_content_type: application/vnd.android.package-archive
