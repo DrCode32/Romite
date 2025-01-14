@@ -1,84 +1,80 @@
-name: Monitor Repositories and Process Releases
+name: Check Releases and Run Command
 
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # Runs every day at midnight UTC
 
 jobs:
-  monitor_and_process:
+  check_releases:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout release repository
+      - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Set up Java
+      - name: Set up JDK 11
         uses: actions/setup-java@v3
         with:
-          java-version: '21'
           distribution: 'temurin'
+          java-version: '11'
 
-      - name: Monitor Repositories
-        id: check_releases
+      - name: Get Latest Release Info
+        id: get_release_info
         run: |
-          repos=(
-            "uazo/cromite"
-            "JingMatrix/ChromeXt"
-            "JingMatrix/LSPatch"
-          )
-          required_files=(
-            "x64_ChromePublic.apk"
-            "ChromeXt-signed.apk"
-            "lspatch.jar"
-          )
-          new_files=""
+          echo "Getting latest release info..."
+          curl -s https://api.github.com/repos/uazo/cromite/releases/latest > cromite-release.json
+          curl -s https://api.github.com/repos/JingMatrix/ChromeXt/releases/latest > chromext-release.json
+          curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest > lspatch-release.json
 
-          for repo in "${repos[@]}"; do
-            releases=$(curl -s "https://api.github.com/repos/$repo/releases")
-            if ! echo "$releases" | jq -e '.[0]' > /dev/null; then
-              echo "Error: Invalid JSON response or empty releases for $repo"
-              continue
-            fi
+      - name: Check Files in Releases
+        id: check_files
+        run: |
+          echo "Checking for required files..."
+          cromite_has_files=false
+          chromext_has_files=false
+          lspatch_has_files=false
 
-            for file in "${required_files[@]}"; do
-              if echo "$releases" | jq -e '.[] | select(.assets) | .assets[] | select(.name == "'"$file"'")' > /dev/null; then
-                new_files+="$file:$repo\n"
-              fi
-            done
-          done
-
-          if [ -z "$new_files" ]; then
-            echo "new_files=false" >> $GITHUB_ENV
-          else
-            echo "new_files=true" >> $GITHUB_ENV
-            echo -e "$new_files" > new_files_list.txt
+          if jq '.assets[].name | select(. == "x64_ChromePublic.apk")' cromite-release.json; then
+            cromite_has_files=true
           fi
 
-      - name: Check if processing is needed
-        if: env.new_files == 'false'
-        run: echo "No new files to process. Exiting..."
+          if jq '.assets[].name | select(. == "ChromeXt-signed.apk")' chromext-release.json; then
+            chromext_has_files=true
+          fi
 
-      - name: Download and Process Files
-        if: env.new_files == 'true'
+          if jq '.assets[].name | select(. == "lspatch.jar")' lspatch-release.json; then
+            lspatch_has_files=true
+          fi
+
+          echo "cromite_has_files=$cromite_has_files" >> $GITHUB_ENV
+          echo "chromext_has_files=$chromext_has_files" >> $GITHUB_ENV
+          echo "lspatch_has_files=$lspatch_has_files" >> $GITHUB_ENV
+
+      - name: Download Required Files
+        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
         run: |
-          while IFS= read -r line; do
-            file=$(echo "$line" | cut -d: -f1)
-            repo=$(echo "$line" | cut -d: -f2)
-            url=$(curl -s "https://api.github.com/repos/$repo/releases" | jq -r '.[] | .assets[] | select(.name == "'"$file"'") | .browser_download_url')
+          echo "Downloading required files..."
+          cromite_asset_url=$(jq -r '.assets[] | select(.name == "x64_ChromePublic.apk").browser_download_url' cromite-release.json)
+          chromext_asset_url=$(jq -r '.assets[] | select(.name == "ChromeXt-signed.apk").browser_download_url' chromext-release.json)
+          lspatch_asset_url=$(jq -r '.assets[] | select(.name == "lspatch.jar").browser_download_url' lspatch-release.json)
 
-            curl -L -o "$file" "$url"
-          done < new_files_list.txt
+          wget -q $cromite_asset_url -O x64_ChromePublic.apk
+          wget -q $chromext_asset_url -O ChromeXt-signed.apk
+          wget -q $lspatch_asset_url -O lspatch.jar
 
+      - name: Run Java Command
+        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
+        run: |
+          echo "Running Java command..."
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
 
-      - name: Publish to Release Repository
-        if: env.new_files == 'true'
-        run: |
-          mkdir -p release-output
-          mv patched-apk.apk release-output/
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add release-output/
-          git commit -m "Updated release output with new files"
-          git push
+      - name: Upload Output to Release
+        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.repository.releases.latest.upload_url }}
+          asset_path: ./path_to_output_file/output_file_name  # Replace with actual path and filename
+          asset_name: output_file_name  # Replace with actual filename
+          asset_content_type: application/octet-stream
