@@ -39,7 +39,7 @@ jobs:
           # Get previous versions from a file or set to empty if file doesn't exist
           if [ -f versions.txt ]; then
             source versions.txt
-          else:
+          else
             cromite_prev=""
             chromext_prev=""
             lspatch_prev=""
