@@ -2,8 +2,9 @@ name: Check Repositories for New Versions
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Runs daily at midnight
-
+    - cron: '0 */6 * * *'  # Run every 6 hours
+  workflow_dispatch:
+  
 jobs:
   check-and-process:
     runs-on: ubuntu-latest
