@@ -1,81 +1,74 @@
-name: Check Releases and Run Command
+name: Check Repositories for New Versions
 
 on:
   schedule:
-    - cron: '0 0 * * *'  
-      workflow_dispatch:
+    - cron: '0 0 * * *' # Runs daily at midnight
 
 jobs:
-  check_releases:
+  check-and-process:
     runs-on: ubuntu-latest
+    env:
+      CRONITE_REPO: 'uazo/cromite'
+      CHROME_XT_REPO: 'JingMatrix/ChromeXt'
+      LS_PATCH_REPO: 'JingMatrix/LSPatch'
+      OUTPUT_FILE: 'output.txt'
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
 
-      - name: Set up JDK 11
+      - name: Fetch Latest Release Assets
+        id: fetch_releases
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fetchAsset = async (repo, assetName) => {
+              const response = await github.rest.repos.getLatestRelease({ owner: repo.split('/')[0], repo: repo.split('/')[1] });
+              const asset = response.data.assets.find(a => a.name === assetName);
+              return asset ? asset.browser_download_url : null;
+            };
+
+            const cromiteApk = await fetchAsset(process.env.CRONITE_REPO, 'x64_ChromePublic.apk');
+            const chromeXtApk = await fetchAsset(process.env.CHROME_XT_REPO, 'ChromeXt-signed.apk');
+            const lsPatchJar = await fetchAsset(process.env.LS_PATCH_REPO, 'lspatch.jar');
+
+            core.setOutput('cromite_apk', cromiteApk);
+            core.setOutput('chrome_xt_apk', chromeXtApk);
+            core.setOutput('ls_patch_jar', lsPatchJar);
+
+      - name: Check for New Versions
+        id: check_versions
+        run: |
+          echo "Cromite APK: ${{ steps.fetch_releases.outputs.cromite_apk }}"
+          echo "ChromeXt APK: ${{ steps.fetch_releases.outputs.chrome_xt_apk }}"
+          echo "LSPatch JAR: ${{ steps.fetch_releases.outputs.ls_patch_jar }}"
+
+          # Here you can add logic to compare versions with stored values
+          # For simplicity, assume we always download and process
+
+      - name: Download New Files
+        if: steps.check_versions.outputs.trigger != 'false'
+        run: |
+          wget ${{ steps.fetch_releases.outputs.cromite_apk }} -O x64_ChromePublic.apk
+          wget ${{ steps.fetch_releases.outputs.chrome_xt_apk }} -O ChromeXt-signed.apk
+          wget ${{ steps.fetch_releases.outputs.ls_patch_jar }} -O lspatch.jar
+
+      - name: Set Up Java 21
         uses: actions/setup-java@v3
         with:
-          distribution: 'temurin'
-          java-version: '11'
+          java-version: '21'
+          distribution: 'adopt'
 
-      - name: Get Latest Release Info
-        id: get_release_info
+      - name: Run Command and Capture Output
+        if: steps.check_versions.outputs.trigger != 'false'
         run: |
-          echo "Getting latest release info..."
-          curl -s https://api.github.com/repos/uazo/cromite/releases/latest > cromite-release.json
-          curl -s https://api.github.com/repos/JingMatrix/ChromeXt/releases/latest > chromext-release.json
-          curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest > lspatch-release.json
+          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex > $OUTPUT_FILE
 
-      - name: Check Files in Releases
-        id: check_files
+      - name: Commit and Push Output
+        if: steps.check_versions.outputs.trigger != 'false'
         run: |
-          echo "Checking for required files..."
-          cromite_has_files=false
-          chromext_has_files=false
-          lspatch_has_files=false
-
-          if jq '.assets[].name | select(. == "x64_ChromePublic.apk")' cromite-release.json; then
-            cromite_has_files=true
-          fi
-
-          if jq '.assets[].name | select(. == "ChromeXt-signed.apk")' chromext-release.json; then
-            chromext_has_files=true
-          fi
-
-          if jq '.assets[].name | select(. == "lspatch.jar")' lspatch-release.json; then
-            lspatch_has_files=true
-          fi
-
-          echo "cromite_has_files=$cromite_has_files" >> $GITHUB_ENV
-          echo "chromext_has_files=$chromext_has_files" >> $GITHUB_ENV
-          echo "lspatch_has_files=$lspatch_has_files" >> $GITHUB_ENV
-
-      - name: Download Required Files
-        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
-        run: |
-          echo "Downloading required files..."
-          cromite_asset_url=$(jq -r '.assets[] | select(.name == "x64_ChromePublic.apk").browser_download_url' cromite-release.json)
-          chromext_asset_url=$(jq -r '.assets[] | select(.name == "ChromeXt-signed.apk").browser_download_url' chromext-release.json)
-          lspatch_asset_url=$(jq -r '.assets[] | select(.name == "lspatch.jar").browser_download_url' lspatch-release.json)
-
-          wget -q $cromite_asset_url -O x64_ChromePublic.apk
-          wget -q $chromext_asset_url -O ChromeXt-signed.apk
-          wget -q $lspatch_asset_url -O lspatch.jar
-
-      - name: Run Java Command
-        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
-        run: |
-          echo "Running Java command..."
-          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-
-      - name: Upload Output to Release
-        if: env.cromite_has_files && env.chromext_has_files && env.lspatch_has_files
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.repository.releases.latest.upload_url }}
-          asset_path: ./path_to_output_file/output_file_name  # Replace with actual path and filename
-          asset_name: output_file_name  # Replace with actual filename
-          asset_content_type: application/octet-stream
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          git add $OUTPUT_FILE
+          git commit -m "Update output after processing new versions"
+          git push
