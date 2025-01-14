@@ -1,68 +1,84 @@
-name: Check Repositories for New Versions
+name: Monitor and Process APKs
 
 on:
   schedule:
     - cron: '0 */6 * * *'  # Run every 6 hours
-  workflow_dispatch:
-  
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  CROMITE_REPO: 'uazo/cromite'
+  CHROMEXT_REPO: 'JingMatrix/ChromeXt'
+  LSPATCH_REPO: 'JingMatrix/LSPatch'
+
 jobs:
-  check-releases-and-process:
+  check-and-process:
     runs-on: ubuntu-latest
-    env:
-      CROMITE_REPO: 'uazo/cromite'
-      CHROMEXT_REPO: 'JingMatrix/ChromeXt'
-      LSPATCH_REPO: 'JingMatrix/LSPatch'
-
+    
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set Up Java 21
-        uses: actions/setup-java
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
+          distribution: 'temurin'
           java-version: '21'
-          distribution: 'adopt'
 
-      - name: Initialize Variables
-        run: |
-          echo "CROMITE_TAG=$(gh release list -R $CROMITE_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
-          echo "CHROMEXT_TAG=$(gh release list -R $CHROMEXT_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
-          echo "LSPATCH_TAG=$(gh release list -R $LSPATCH_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
+      - name: Create work directory
+        run: mkdir -p work_dir
 
-      - name: Check for New Releases
-        id: check_releases
+      - name: Check Cromite latest release
+        id: cromite
         run: |
-          # Check if there's a new release since the last run
-          # For demonstration, assume we're checking against the last stored tag
-          # In practice, you'd need to store the last checked tag, e.g., in a file
-          echo "No new releases" # Replace with actual logic
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$CROMITE_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="x64_ChromePublic.apk") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Download Assets
-        if: steps.check_releases.outputs.new_release == 'true'
+      - name: Check ChromeXt latest release
+        id: chromext
         run: |
-          # Download the assets from the new releases
-          # Replace with actual download commands
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$CHROMEXT_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="ChromeXt-signed.apk") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Process APK with lspatch.jar
-        if: steps.check_releases.outputs.new_release == 'true'
+      - name: Check LSPatch latest release
+        id: lspatch
         run: |
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$LSPATCH_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="lspatch.jar") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download required files
+        run: |
+          curl -L "${{ steps.cromite.outputs.download_url }}" -o "work_dir/x64_ChromePublic.apk"
+          curl -L "${{ steps.chromext.outputs.download_url }}" -o "work_dir/ChromeXt-signed.apk"
+          curl -L "${{ steps.lspatch.outputs.download_url }}" -o "work_dir/lspatch.jar"
+
+      - name: Process APKs
+        run: |
+          cd work_dir
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-
-      - name: Upload Output APK to Release
-        if: steps.check_releases.outputs.new_release == 'true'
-        uses: actions/upload-release-asset
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: output.apk
-          asset_name: processed.apk
-          asset_content_type: application/octet-stream
+          echo "Processing completed"
 
       - name: Create Release
-        if: steps.check_releases.outputs.new_release == 'true'
-        id: create_release
-        uses: actions/create-release
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.CROMITE_TAG }}
-          release_name: Release ${{ env.CROMITE_TAG }}
-          draft: false
-          prerelease: false
+          tag_name: "v${{ steps.cromite.outputs.version }}_${{ steps.chromext.outputs.version }}"
+          files: work_dir/x64_ChromePublic_lspatched.apk
+          body: |
+            Automated release combining:
+            - Cromite version: ${{ steps.cromite.outputs.version }}
+            - ChromeXt version: ${{ steps.chromext.outputs.version }}
+            - LSPatch version: ${{ steps.lspatch.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf work_dir
