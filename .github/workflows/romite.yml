@@ -61,16 +61,25 @@ jobs:
           curl -L "${{ steps.lspatch.outputs.download_url }}" -o "work_dir/lspatch.jar"
 
       - name: Process APKs
+        id: process
         run: |
           cd work_dir
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-          echo "Processing completed"
+          # Find the output APK
+          OUTPUT_APK=$(find . -name "*_lspatched.apk")
+          if [ -z "$OUTPUT_APK" ]; then
+            echo "Error: Could not find lspatched APK file"
+            exit 1
+          fi
+          echo "output_apk=$OUTPUT_APK" >> $GITHUB_OUTPUT
+          echo "Processing completed with output: $OUTPUT_APK"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: "v${{ steps.cromite.outputs.version }}_${{ steps.chromext.outputs.version }}"
-          files: work_dir/x64_ChromePublic_lspatched.apk
+          files: |
+            work_dir/${{ steps.process.outputs.output_apk }}
           body: |
             Automated release combining:
             - Cromite version: ${{ steps.cromite.outputs.version }}
