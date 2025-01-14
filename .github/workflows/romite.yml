@@ -1,81 +1,88 @@
-name: Monitor and Process APK Releases
+name: Monitor Repositories and Process Releases
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Run every 6 hours
-  workflow_dispatch:  # Allow manual triggering
+    - cron: '0 * * * *' # Runs every hour
+  workflow_dispatch: # Allow manual triggers
 
 jobs:
-  check-and-process:
+  monitor_and_process:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        
+      # Checkout this repository (to potentially publish the result later)
+      - name: Checkout release repository
+        uses: actions/checkout@v3
+
+      # Set up Java for running the command
       - name: Set up Java
         uses: actions/setup-java@v3
         with:
-          distribution: 'temurin'
-          java-version: '17'
-          
-      - name: Check Latest Releases and Download Files
-        id: check-releases
+          java-version: '17' # Adjust Java version as needed
+
+      # Monitor the repositories for new releases
+      - name: Monitor Repositories
+        id: check_releases
         run: |
-          # Function to get latest release asset URL
-          get_latest_release() {
-            repo=$1
-            asset_name=$2
-            curl -s "https://api.github.com/repos/$repo/releases/latest" | \
-            jq -r --arg ASSET "$asset_name" '.assets[] | select(.name == $ASSET) | .browser_download_url'
-          }
-          
-          # Get latest release URLs
-          CROMITE_URL=$(get_latest_release "uazo/cromite" "x64_ChromePublic.apk")
-          CHROMEXT_URL=$(get_latest_release "JingMatrix/ChromeXt" "ChromeXt-signed.apk")
-          LSPATCH_URL=$(get_latest_release "JingMatrix/LSPatch" "lspatch.jar")
-          
-          # Create artifacts directory
-          mkdir -p artifacts
-          
-          # Download files if they exist and are new
-          if [ ! -z "$CROMITE_URL" ]; then
-            curl -L -o "artifacts/x64_ChromePublic.apk" "$CROMITE_URL"
-            echo "cromite_downloaded=true" >> $GITHUB_ENV
-          fi
-          
-          if [ ! -z "$CHROMEXT_URL" ]; then
-            curl -L -o "artifacts/ChromeXt-signed.apk" "$CHROMEXT_URL"
-            echo "chromext_downloaded=true" >> $GITHUB_ENV
-          fi
-          
-          if [ ! -z "$LSPATCH_URL" ]; then
-            curl -L -o "artifacts/lspatch.jar" "$LSPATCH_URL"
-            echo "lspatch_downloaded=true" >> $GITHUB_ENV
-          fi
-          
-          # Set output if all required files are downloaded
-          if [ "$cromite_downloaded" = "true" ] && [ "$chromext_downloaded" = "true" ] && [ "$lspatch_downloaded" = "true" ]; then
-            echo "files_ready=true" >> $GITHUB_OUTPUT
+          repos=(
+            "uazo/cromite"
+            "JingMatrix/ChromeXt"
+            "JingMatrix/LSPatch"
+          )
+          required_files=(
+            "x64_ChromePublic.apk"
+            "ChromeXt-signed.apk"
+            "lspatch.jar"
+          )
+          new_files=""
+
+          for repo in "${repos[@]}"; do
+            releases=$(curl -s "https://api.github.com/repos/$repo/releases")
+            for file in "${required_files[@]}"; do
+              if echo "$releases" | jq -e '.[] | .assets[] | select(.name == "'"$file"'")' > /dev/null; then
+                echo "New version of $file found in $repo"
+                new_files+="$file:$repo\n"
+              fi
+            done
+          done
+
+          if [ -z "$new_files" ]; then
+            echo "No new files detected."
+            echo "new_files=false" >> $GITHUB_ENV
+          else
+            echo "New files detected: $new_files"
+            echo "new_files=true" >> $GITHUB_ENV
+            echo "$new_files" > new_files_list.txt
           fi
 
-      - name: Process APK
-        if: steps.check-releases.outputs.files_ready == 'true'
+      # Exit if no new files are detected
+      - name: Check if processing is needed
+        if: env.new_files == 'false'
+        run: echo "No new files to process. Exiting..."
+
+      # Download the files and run the command
+      - name: Download and Process Files
+        if: env.new_files == 'true'
         run: |
-          cd artifacts
+          while IFS= read -r line; do
+            file=$(echo "$line" | cut -d: -f1)
+            repo=$(echo "$line" | cut -d: -f2)
+            url=$(curl -s "https://api.github.com/repos/$repo/releases" | jq -r '.[] | .assets[] | select(.name == "'"$file"'") | .browser_download_url')
+
+            curl -L -o "$file" "$url"
+          done < new_files_list.txt
+
+          # Run the provided command
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-          
-      - name: Create Release
-        if: steps.check-releases.outputs.files_ready == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/x64_ChromePublic-patched.apk
-          name: "Auto-processed Release ${{ github.sha }}"
-          tag_name: "release-${{ github.sha }}"
-          body: |
-            Automatically processed release combining:
-            - Cromite APK
-            - ChromeXt
-            - LSPatch
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the results to the release repository
+      - name: Publish to Release Repository
+        if: env.new_files == 'true'
+        run: |
+          mkdir -p release-output
+          mv patched-apk.apk release-output/ # Replace with the actual output file name
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add release-output/
+          git commit -m "Updated release output with new files"
+          git push
