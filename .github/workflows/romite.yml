@@ -1,9 +1,10 @@
-name: Check for New Releases and Process APK
+name: Check Repositories for New Versions
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Run daily at midnight
-
+    - cron: '0 */6 * * *'  # Run every 6 hours
+  workflow_dispatch:
+  
 jobs:
   check-releases-and-process:
     runs-on: ubuntu-latest
@@ -14,18 +15,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set Up Java 21
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'adopt'
-
-      - name: Install GitHub CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gh
 
       - name: Initialize Variables
         run: |
@@ -45,14 +41,21 @@ jobs:
         if: steps.check_releases.outputs.new_release == 'true'
         run: |
           # Download the assets from the new releases
-          gh release download -R $CROMITE_REPO -p 'x64_ChromePublic.apk'
-          gh release download -R $CHROMEXT_REPO -p 'ChromeXt-signed.apk'
-          gh release download -R $LSPATCH_REPO -p 'lspatch.jar'
+          # Replace with actual download commands
 
       - name: Process APK with lspatch.jar
         if: steps.check_releases.outputs.new_release == 'true'
         run: |
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
+
+      - name: Upload Output APK to Release
+        if: steps.check_releases.outputs.new_release == 'true'
+        uses: actions/upload-release-asset@v3
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: output.apk
+          asset_name: processed.apk
+          asset_content_type: application/octet-stream
 
       - name: Create Release
         if: steps.check_releases.outputs.new_release == 'true'
@@ -63,12 +66,3 @@ jobs:
           release_name: Release ${{ env.CROMITE_TAG }}
           draft: false
           prerelease: false
-
-      - name: Upload Output APK to Release
-        if: steps.check_releases.outputs.new_release == 'true'
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: output.apk
-          asset_name: processed.apk
-          asset_content_type: application/octet-stream
