@@ -1,86 +1,95 @@
-name: Patch Chrome with ChromeXt
+name: Monitor and Process APKs
 
 on:
-  release:
-    types: [published]
   schedule:
     - cron: '0 */6 * * *'  # Run every 6 hours
-  workflow_dispatch:
-  
-jobs:
-  patch_and_upload:
-    if: github.event_name == 'release'  # Ensure the job only runs on release events
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # To allow uploading release assets
+  workflow_dispatch:  # Allow manual triggers
 
+env:
+  CROMITE_REPO: 'uazo/cromite'
+  CHROMEXT_REPO: 'JingMatrix/ChromeXt'
+  LSPATCH_REPO: 'JingMatrix/LSPatch'
+
+jobs:
+  check-and-process:
+    runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code (optional, only needed if lspatch.jar is in a repo)
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Download Assets and Patch
-        id: download_assets_and_patch
+      - name: Create work directory
+        run: mkdir -p work_dir
+
+      - name: Check Cromite latest release
+        id: cromite
         run: |
-          REPO="${GITHUB_REPOSITORY}"
-          RELEASE_TAG="$GITHUB_EVENT_RELEASE_TAG_NAME"
-          echo "Checking repository: $REPO, Release Tag: $RELEASE_TAG"
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$CROMITE_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="x64_ChromePublic.apk") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-          # Function to download a specific asset if it exists
-          download_asset() {
-            ASSET_NAME="$1"
-            DOWNLOAD_URL=$(curl -s -H "Authorization: token ${{ github.token }}" \
-              "https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}" | \
-              jq -r ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
+      - name: Check ChromeXt latest release
+        id: chromext
+        run: |
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$CHROMEXT_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="ChromeXt-signed.apk") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-            if [[ -n "$DOWNLOAD_URL" ]]; then
-              echo "Downloading $ASSET_NAME from $REPO"
-              curl -s -L -o "$ASSET_NAME" "$DOWNLOAD_URL"
-              return 0
-            else
-              echo "$ASSET_NAME not found in release for $REPO"
-              return 1
-            fi
-          }
+      - name: Check LSPatch latest release
+        id: lspatch
+        run: |
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/$LSPATCH_REPO/releases/latest")
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name=="lspatch.jar") | .browser_download_url')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-          # Process uazo/cromite
-          if [[ "$REPO" == "uazo/cromite" ]]; then
-            if download_asset "x64_ChromePublic.apk"; then
-              echo "Found x64_ChromePublic.apk"
-              # Check for ChromeXt-signed.apk and lspatch.jar (assuming they are in the same release or accessible)
-              if download_asset "ChromeXt-signed.apk" && download_asset "lspatch.jar"; then
-                echo "Found ChromeXt-signed.apk and lspatch.jar, running patch command"
-                java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-                OUTPUT_APK="Patched_ChromePublic.apk"
-                mv "x64_ChromePublic_patched.apk" "$OUTPUT_APK"
-                echo "::set-output name=patch_status::success" # Set output to indicate success
-                echo "OUTPUT_APK=$OUTPUT_APK" >> $GITHUB_ENV # Set environment variable for subsequent steps
-              else
-                echo "ChromeXt-signed.apk or lspatch.jar not found, skipping patching for uazo/cromite"
-                echo "::set-output name=patch_status::failure" # Set output to indicate failure
-              fi
-            fi
+      - name: Download required files
+        run: |
+          curl -L "${{ steps.cromite.outputs.download_url }}" -o "work_dir/x64_ChromePublic.apk"
+          curl -L "${{ steps.chromext.outputs.download_url }}" -o "work_dir/ChromeXt-signed.apk"
+          curl -L "${{ steps.lspatch.outputs.download_url }}" -o "work_dir/lspatch.jar"
+
+      - name: Process APKs
+        id: process
+        run: |
+          cd work_dir
+          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
+          # Find the output APK with the correct pattern
+          OUTPUT_APK=$(find . -name "*-lspatched.apk")
+          if [ -z "$OUTPUT_APK" ]; then
+            echo "Error: Could not find lspatched APK file"
+            exit 1
           fi
+          # Remove the "./" prefix from the path if it exists
+          OUTPUT_APK=$(echo "$OUTPUT_APK" | sed 's|^\./||')
+          echo "output_apk=$OUTPUT_APK" >> $GITHUB_OUTPUT
+          echo "Processing completed with output: $OUTPUT_APK"
 
-          # Process JingMatrix/ChromeXt (we only need to know if it triggered)
-          if [[ "$REPO" == "JingMatrix/ChromeXt" ]]; then
-            echo "New release in JingMatrix/ChromeXt, no patching action needed here."
-          fi
-
-          # Process JingMatrix/LSPatch (we only need to know if it triggered)
-          if [[ "$REPO" == "JingMatrix/LSPatch" ]]; then
-            echo "New release in JingMatrix/LSPatch, no patching action needed here."
-          fi
-
-      - name: Upload Patched APK to Release Assets
-        uses: actions/upload-release-asset@v1
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ${{ env.OUTPUT_APK }}
-          asset_name: ${{ env.OUTPUT_APK }}
-          asset_content_type: application/vnd.android.package-archive
+          tag_name: "v${{ steps.cromite.outputs.version }}_${{ steps.chromext.outputs.version }}"
+          files: |
+            work_dir/${{ steps.process.outputs.output_apk }}
+          body: |
+            Automated release combining:
+            - Cromite version: ${{ steps.cromite.outputs.version }}
+            - ChromeXt version: ${{ steps.chromext.outputs.version }}
+            - LSPatch version: ${{ steps.lspatch.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf work_dir
