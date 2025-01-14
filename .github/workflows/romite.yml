@@ -36,8 +36,13 @@ jobs:
 
           for repo in "${repos[@]}"; do
             releases=$(curl -s "https://api.github.com/repos/$repo/releases")
+            if ! echo "$releases" | jq -e '.[0]' > /dev/null; then
+              echo "Error: Invalid JSON response or empty releases for $repo"
+              continue
+            fi
+
             for file in "${required_files[@]}"; do
-              if echo "$releases" | jq -e '.[] | .assets[] | select(.name == "'"$file"'")' > /dev/null; then
+              if echo "$releases" | jq -e '.[] | select(.assets) | .assets[] | select(.name == "'"$file"'")' > /dev/null; then
                 new_files+="$file:$repo\n"
               fi
             done
@@ -47,7 +52,7 @@ jobs:
             echo "new_files=false" >> $GITHUB_ENV
           else
             echo "new_files=true" >> $GITHUB_ENV
-            echo "$new_files" > new_files_list.txt
+            echo -e "$new_files" > new_files_list.txt
           fi
 
       - name: Check if processing is needed
