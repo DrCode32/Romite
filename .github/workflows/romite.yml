@@ -5,9 +5,21 @@ on:
     - cron: '0 */6 * * *'  # Run every 6 hours
   workflow_dispatch:
   
+permissions:
+  repo: write
+
 jobs:
-  check-releases:
+  check-releases-and-process:
     runs-on: ubuntu-latest
+    env:
+      CromiteRepo: uazo/cromite
+      ChromeXtRepo: JingMatrix/ChromeXt
+      LSPatchRepo: JingMatrix/LSPatch
+      CromiteFile: x64_ChromePublic.apk
+      ChromeXtFile: ChromeXt-signed.apk
+      LSPatchFile: lspatch.jar
+      OutputAPK: output.apk
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
@@ -16,115 +28,155 @@ jobs:
         uses: actions/setup-java@v3
         with:
           java-version: '21'
-          distribution: 'adopt'
+          distribution: 'temurin'
 
-      - name: Read Latest Releases
-        id: read_releases
+      - name: Initialize Previous Release Info
         run: |
-          if [[ -f latest_releases.txt ]]; then
-            RELEASES=$(cat latest_releases.txt)
-            echo "::set-output name=releases::$RELEASES"
-          else
-            echo "::set-output name=releases::{}"
+          # Create a file to store previous release info if it doesn't exist
+          touch release_info.json
+          if [ ! -f release_info.json ]; then
+            echo '{}' > release_info.json
           fi
 
-      - name: Fetch Latest Releases
-        id: fetch_releases
+      - name: Get Previous Release Info
+        id: get_prev_info
         run: |
-          # Fetch latest release for uazo/cromite
-          RESPONSE=$(curl -s https://api.github.com/repos/uazo/cromite/releases/latest)
-          LATEST_TAG_CROMITE=$(echo $RESPONSE | jq -r '.tag_name')
-          ASSETS_CROMITE=$(echo $RESPONSE | jq -r '.assets[].name' | grep x64_ChromePublic.apk)
-          
-          # Fetch latest release for JingMatrix/ChromeXt
-          RESPONSE=$(curl -s https://api.github.com/repos/JingMatrix/ChromeXt/releases/latest)
-          LATEST_TAG_CHROME_XT=$(echo $RESPONSE | jq -r '.tag_name')
-          ASSETS_CHROME_XT=$(echo $RESPONSE | jq -r '.assets[].name' | grep ChromeXt-signed.apk)
-          
-          # Fetch latest release for JingMatrix/LSPatch
-          RESPONSE=$(curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest)
-          LATEST_TAG_LSPATCH=$(echo $RESPONSE | jq -r '.tag_name')
-          ASSETS_LSPATCH=$(echo $RESPONSE | jq -r '.assets[].name' | grep lspatch.jar)
-          
-          echo "CROMITE_TAG=$LATEST_TAG_CROMITE" >> $GITHUB_ENV
-          echo "CHROME_XT_TAG=$LATEST_TAG_CHROME_XT" >> $GITHUB_ENV
-          echo "LSPATCH_TAG=$LATEST_TAG_LSPATCH" >> $GITHUB_ENV
-          echo "CROMITE_ASSETS=$ASSETS_CROMITE" >> $GITHUB_ENV
-          echo "CHROME_XT_ASSETS=$ASSETS_CHROME_XT" >> $GITHUB_ENV
-          echo "LSPATCH_ASSETS=$ASSETS_LSPATCH" >> $GITHUB_ENV
+          echo "::set-output name=cromite::$(jq -r '.cromite // empty' release_info.json)"
+          echo "::set-output name=chromext::$(jq -r '.chromext // empty' release_info.json)"
+          echo "::set-output name=lspatch::$(jq -r '.lspatch // empty' release_info.json)"
 
-      - name: Check for New Releases
-        id: check_new
+      - name: Get Latest Release Info for Cromite
+        id: get_cromite_release
         run: |
-          RELEASES=$(echo ${{ steps.read_releases.outputs.releases }})
-          CROMITE_TAG=${{ env.CROMITE_TAG }}
-          CHROME_XT_TAG=${{ env.CHROME_XT_TAG }}
-          LSPATCH_TAG=${{ env.LSPATCH_TAG }}
-          CROMITE_ASSETS=${{ env.CROMITE_ASSETS }}
-          CHROME_XT_ASSETS=${{ env.CHROME_XT_ASSETS }}
-          LSPATCH_ASSETS=${{ env.LSPATCH_ASSETS }}
-          
-          if [[ "$RELEASES" != *"$CROMITE_TAG"* || "$CROMITE_ASSETS" != *"x64_ChromePublic.apk"* ||
-                "$RELEASES" != *"$CHROME_XT_TAG"* || "$CHROME_XT_ASSETS" != *"ChromeXt-signed.apk"* ||
-                "$RELEASES" != *"$LSPATCH_TAG"* || "$LSPATCH_ASSETS" != *"lspatch.jar"* ]]; then
-            echo "New release found."
-            echo "::set-output name=has_new::true"
+          response=$(curl -sL https://api.github.com/repos/${CromiteRepo}/releases/latest)
+          tag_name=$(echo $response | jq -r '.tag_name')
+          if [[ $tag_name == null ]]; then
+            echo "No release found for Cromite"
+            echo "::set-output name=tag::"
+            echo "::set-output name=url::"
           else
-            echo "No new releases."
-            echo "::set-output name=has_new::false"
+            echo "::set-output name=tag::${tag_name}"
+            assets=$(echo $response | jq -r '.assets[] | select(.name=="'"${CromiteFile}"'") | .browser_download_url')
+            if [[ -n $assets ]]; then
+              echo "::set-output name=url::${assets}"
+            else
+              echo "Required asset not found for Cromite"
+              echo "::set-output name=url::"
+            fi
           fi
 
-      - name: Download Assets
-        if: steps.check_new.outputs.has_new == 'true'
+      - name: Download Cromite Asset if New
+        if: steps.get_cromite_release.outputs.tag != steps.get_prev_info.outputs.cromite
         run: |
-          # Download x64_ChromePublic.apk
-          URL=$(curl -s https://api.github.com/repos/uazo/cromite/releases/latest | jq -r --arg ASSET "x64_ChromePublic.apk" '.assets[] | select(.name==$ASSET) | .browser_download_url')
-          curl -L -o x64_ChromePublic.apk $URL
-          
-          # Download ChromeXt-signed.apk
-          URL=$(curl -s https://api.github.com/repos/JingMatrix/ChromeXt/releases/latest | jq -r --arg ASSET "ChromeXt-signed.apk" '.assets[] | select(.name==$ASSET) | .browser_download_url')
-          curl -L -o ChromeXt-signed.apk $URL
-          
-          # Download lspatch.jar
-          URL=$(curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest | jq -r --arg ASSET "lspatch.jar" '.assets[] | select(.name==$ASSET) | .browser_download_url')
-          curl -L -o lspatch.jar $URL
+          if [ -n "${{ steps.get_cromite_release.outputs.url }}" ]; then
+            echo "Downloading ${CromiteFile} from Cromite release"
+            curl -sLO ${{ steps.get_cromite_release.outputs.url }}
+          fi
 
-      - name: Patch APK
-        if: steps.check_new.outputs.has_new == 'true'
+      - name: Get Latest Release Info for ChromeXt
+        id: get_chromext_release
         run: |
-          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-          # The output APK is 'x64_ChromePublic_patched.apk' by default
+          response=$(curl -sL https://api.github.com/repos/${ChromeXtRepo}/releases/latest)
+          tag_name=$(echo $response | jq -r '.tag_name')
+          if [[ $tag_name == null ]]; then
+            echo "No release found for ChromeXt"
+            echo "::set-output name=tag::"
+            echo "::set-output name=url::"
+          else
+            echo "::set-output name=tag::${tag_name}"
+            assets=$(echo $response | jq -r '.assets[] | select(.name=="'"${ChromeXtFile}"'") | .browser_download_url')
+            if [[ -n $assets ]]; then
+              echo "::set-output name=url::${assets}"
+            else
+              echo "Required asset not found for ChromeXt"
+              echo "::set-output name=url::"
+            fi
+          fi
+
+      - name: Download ChromeXt Asset if New
+        if: steps.get_chromext_release.outputs.tag != steps.get_prev_info.outputs.chromext
+        run: |
+          if [ -n "${{ steps.get_chromext_release.outputs.url }}" ]; then
+            echo "Downloading ${ChromeXtFile} from ChromeXt release"
+            curl -sLO ${{ steps.get_chromext_release.outputs.url }}
+          fi
+
+      - name: Get Latest Release Info for LSPatch
+        id: get_lspatch_release
+        run: |
+          response=$(curl -sL https://api.github.com/repos/${LSPatchRepo}/releases/latest)
+          tag_name=$(echo $response | jq -r '.tag_name')
+          if [[ $tag_name == null ]]; then
+            echo "No release found for LSPatch"
+            echo "::set-output name=tag::"
+            echo "::set-output name=url::"
+          else
+            echo "::set-output name=tag::${tag_name}"
+            assets=$(echo $response | jq -r '.assets[] | select(.name=="'"${LSPatchFile}"'") | .browser_download_url')
+            if [[ -n $assets ]]; then
+              echo "::set-output name=url::${assets}"
+            else
+              echo "Required asset not found for LSPatch"
+              echo "::set-output name=url::"
+            fi
+          fi
+
+      - name: Download LSPatch Asset if New
+        if: steps.get_lspatch_release.outputs.tag != steps.get_prev_info.outputs.lspatch
+        run: |
+          if [ -n "${{ steps.get_lspatch_release.outputs.url }}" ]; then
+            echo "Downloading ${LSPatchFile} from LSPatch release"
+            curl -sLO ${{ steps.get_lspatch_release.outputs.url }}
+          fi
+
+      - name: Check for All Required Files
+        run: |
+          if [ -f "${CromiteFile}" ] && [ -f "${ChromeXtFile}" ] && [ -f "${LSPatchFile}" ]; then
+            echo "All required files are present."
+          else
+            echo "Not all required files are present. Exiting."
+            exit 1
+          fi
+
+      - name: Process APK with lspatch.jar
+        run: |
+          java -jar ${LSPatchFile} ${CromiteFile} -d -v -m ${ChromeXtFile} --force --injectdex -o ${OutputAPK}
 
       - name: Create Release
-        if: steps.check_new.outputs.has_new == 'true'
+        id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.CROMITE_TAG }}-patched
-          release_name: Patched APK for ${{ env.CROMITE_TAG }}
+          tag_name: v1.0.0-$(date -u +%Y%m%d-%H%M%S)
+          release_name: Release v1.0.0-$(date -u +%Y%m%d-%H%M%S)
+          body: |
+            This release was created using:
+            - Cromite: ${{ steps.get_cromite_release.outputs.tag }}
+            - ChromeXt: ${{ steps.get_chromext_release.outputs.tag }}
+            - LSPatch: ${{ steps.get_lspatch_release.outputs.tag }}
           draft: false
           prerelease: false
 
-      - name: Upload Patched APK
-        if: steps.check_new.outputs.has_new == 'true'
+      - name: Upload APK as Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: x64_ChromePublic_patched.apk
-          asset_name: x64_ChromePublic_patched.apk
+          asset_path: ${OutputAPK}
+          asset_name: output.apk
           asset_content_type: application/octet-stream
 
-      - name: Update Latest Releases
-        if: steps.check_new.outputs.has_new == 'true'
+      - name: Update Release Info
         run: |
-          echo "CROMITE_TAG=${{ env.CROMITE_TAG }}" > latest_releases.txt
-          echo "CHROME_XT_TAG=${{ env.CHROME_XT_TAG }}" >> latest_releases.txt
-          echo "LSPATCH_TAG=${{ env.LSPATCH_TAG }}" >> latest_releases.txt
-          git config --global user.email "action@github.com"
-          git config --global user.name "GitHub Action"
-          git add latest_releases.txt
-          git commit -m "Update latest releases"
+          echo "{ \
+            \"cromite\": \"${{ steps.get_cromite_release.outputs.tag }}\", \
+            \"chromext\": \"${{ steps.get_chromext_release.outputs.tag }}\", \
+            \"lspatch\": \"${{ steps.get_lspatch_release.outputs.tag }}\" \
+          }" > release_info.json
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add release_info.json
+          git commit -m "Update release info"
           git push
