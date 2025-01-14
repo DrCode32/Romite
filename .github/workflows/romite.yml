@@ -3,7 +3,10 @@ name: Patch Chrome with ChromeXt
 on:
   release:
     types: [published]
-
+  schedule:
+    - cron: '0 */6 * * *'  # Run every 6 hours
+  workflow_dispatch:
+  
 jobs:
   patch_and_upload:
     runs-on: ubuntu-latest
