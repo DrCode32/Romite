@@ -93,15 +93,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Create release
+          timestamp=$(date -u +%Y%m%d-%H%M%S)
+          release_json=$(jq -n \
+            --arg tag "v1.0.0-$timestamp" \
+            --arg name "Release v1.0.0-$timestamp" \
+            --arg cromite "${{ steps.releases.outputs.cromite_tag }}" \
+            --arg chromext "${{ steps.releases.outputs.chromext_tag }}" \
+            --arg lspatch "${{ steps.releases.outputs.lspatch_tag }}" \
+            '{
+              tag_name: $tag,
+              name: $name,
+              body: "Release created with:\nCromite: \($cromite)\nChromeXt: \($chromext)\nLSPatch: \($lspatch)"
+            }')
+          
           release_response=$(curl -sL \
             -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            -d '{
-              "tag_name": "v1.0.0-'"$(date -u +%Y%m%d-%H%M%S)"'",
-              "name": "Release v1.0.0-'"$(date -u +%Y%m%d-%H%M%S)"'",
-              "body": "Release created with:\nCromite: '"${{ steps.releases.outputs.cromite_tag }}"'\nChromeXt: '"${{ steps.releases.outputs.chromext_tag }}"'\nLSPatch: '"${{ steps.releases.outputs.lspatch_tag }}"'"
-            }' \
+            -d "$release_json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases")
           
           # Upload asset
@@ -116,11 +125,15 @@ jobs:
       - name: Update Release Info
         if: steps.releases.outputs.updated == 'true'
         run: |
-          echo '{
-            "cromite": "${{ steps.releases.outputs.cromite_tag }}",
-            "chromext": "${{ steps.releases.outputs.chromext_tag }}",
-            "lspatch": "${{ steps.releases.outputs.lspatch_tag }}"
-          }' > release_info.json
+          jq -n \
+            --arg cromite "${{ steps.releases.outputs.cromite_tag }}" \
+            --arg chromext "${{ steps.releases.outputs.chromext_tag }}" \
+            --arg lspatch "${{ steps.releases.outputs.lspatch_tag }}" \
+            '{
+              cromite: $cromite,
+              chromext: $chromext,
+              lspatch: $lspatch
+            }' > release_info.json
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
