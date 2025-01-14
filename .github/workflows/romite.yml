@@ -50,7 +50,7 @@ jobs:
 
       - name: Upload Output APK to Release
         if: steps.check_releases.outputs.new_release == 'true'
-        uses: actions/upload-release-asset@v3
+        uses: actions/upload-release-asset@v4
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: output.apk
@@ -60,7 +60,7 @@ jobs:
       - name: Create Release
         if: steps.check_releases.outputs.new_release == 'true'
         id: create_release
-        uses: actions/create-release@v1
+        uses: actions/create-release@v4
         with:
           tag_name: ${{ env.CROMITE_TAG }}
           release_name: Release ${{ env.CROMITE_TAG }}
