@@ -1,99 +1,81 @@
-name: Romite
+name: Monitor and Process APK Releases
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
-  workflow_dispatch:
+    - cron: '0 */6 * * *'  # Run every 6 hours
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  check-and-patch:
+  check-and-process:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Java 21
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Java
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: '21'  # Changed to Java 21
-
-      - name: Get Latest Releases
-        id: get-releases
+          java-version: '17'
+          
+      - name: Check Latest Releases and Download Files
+        id: check-releases
         run: |
-          # Function to get latest version from a GitHub repo
-          get_latest_version() {
-            curl -s "https://api.github.com/repos/$1/releases/latest" | jq -r '.tag_name'
+          # Function to get latest release asset URL
+          get_latest_release() {
+            repo=$1
+            asset_name=$2
+            curl -s "https://api.github.com/repos/$repo/releases/latest" | \
+            jq -r --arg ASSET "$asset_name" '.assets[] | select(.name == $ASSET) | .browser_download_url'
           }
-
-          # Get latest versions
-          cromite_version=$(get_latest_version "uazo/cromite")
-          chromext_version=$(get_latest_version "JingMatrix/ChromeXt")
-          lspatch_version=$(get_latest_version "JingMatrix/LSPatch")
-
-          echo "cromite_version=$cromite_version" >> $GITHUB_OUTPUT
-          echo "chromext_version=$chromext_version" >> $GITHUB_OUTPUT
-          echo "lspatch_version=$lspatch_version" >> $GITHUB_OUTPUT
-
-          # Get previous versions from a file or set to empty if file doesn't exist
-          if [ -f versions.txt ]; then
-            source versions.txt
-          else
-            cromite_prev=""
-            chromext_prev=""
-            lspatch_prev=""
+          
+          # Get latest release URLs
+          CROMITE_URL=$(get_latest_release "uazo/cromite" "x64_ChromePublic.apk")
+          CHROMEXT_URL=$(get_latest_release "JingMatrix/ChromeXt" "ChromeXt-signed.apk")
+          LSPATCH_URL=$(get_latest_release "JingMatrix/LSPatch" "lspatch.jar")
+          
+          # Create artifacts directory
+          mkdir -p artifacts
+          
+          # Download files if they exist and are new
+          if [ ! -z "$CROMITE_URL" ]; then
+            curl -L -o "artifacts/x64_ChromePublic.apk" "$CROMITE_URL"
+            echo "cromite_downloaded=true" >> $GITHUB_ENV
           fi
-          echo "cromite_prev=$cromite_prev" >> $GITHUB_OUTPUT
-          echo "chromext_prev=$chromext_prev" >> $GITHUB_OUTPUT
-          echo "lspatch_prev=$lspatch_prev" >> $GITHUB_OUTPUT
+          
+          if [ ! -z "$CHROMEXT_URL" ]; then
+            curl -L -o "artifacts/ChromeXt-signed.apk" "$CHROMEXT_URL"
+            echo "chromext_downloaded=true" >> $GITHUB_ENV
+          fi
+          
+          if [ ! -z "$LSPATCH_URL" ]; then
+            curl -L -o "artifacts/lspatch.jar" "$LSPATCH_URL"
+            echo "lspatch_downloaded=true" >> $GITHUB_ENV
+          fi
+          
+          # Set output if all required files are downloaded
+          if [ "$cromite_downloaded" = "true" ] && [ "$chromext_downloaded" = "true" ] && [ "$lspatch_downloaded" = "true" ]; then
+            echo "files_ready=true" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Check for New Versions and Download Files
-        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
+      - name: Process APK
+        if: steps.check-releases.outputs.files_ready == 'true'
         run: |
-          # Function to download file from a GitHub release
-          download_file() {
-            curl -s "https://api.github.com/repos/$1/releases/latest" | jq -r --arg filename "$2" '.assets[] | select(.name == $filename) | .browser_download_url' | xargs curl -L -o "$2"
-          }
-
-          # Download files if new version
-          if [ "${{ steps.get-releases.outputs.cromite_version }}" != "${{ steps.get-releases.outputs.cromite_prev }}" ]; then
-            download_file "uazo/cromite" "x64_ChromePublic.apk"
-          fi
-          if [ "${{ steps.get-releases.outputs.chromext_version }}" != "${{ steps.get-releases.outputs.chromext_prev }}" ]; then
-            download_file "JingMatrix/ChromeXt" "ChromeXt-signed.apk"
-          fi
-          if [ "${{ steps.get-releases.outputs.lspatch_version }}" != "${{ steps.get-releases.outputs.lspatch_prev }}" ]; then
-            download_file "JingMatrix/LSPatch" "lspatch.jar"
-          fi
-
-      - name: Run LSPatch
-        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
-        run: |
-          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex > lspatch_output.txt
-          echo "::notice file=lspatch_output.txt::LSPatch output:"
-          cat lspatch_output.txt
-
-      - name: Upload LSPatch Output as Artifact
-        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
-        uses: actions/upload-artifact@v3
+          cd artifacts
+          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
+          
+      - name: Create Release
+        if: steps.check-releases.outputs.files_ready == 'true'
+        uses: softprops/action-gh-release@v1
         with:
-          name: lspatch-output
-          path: lspatch_output.txt
-          retention-days: 5
-
-      - name: Save Current Versions
-        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
-        run: |
-          echo "cromite_prev=${{ steps.get-releases.outputs.cromite_version }}" > versions.txt
-          echo "chromext_prev=${{ steps.get-releases.outputs.chromext_version }}" >> versions.txt
-          echo "lspatch_prev=${{ steps.get-releases.outputs.lspatch_version }}" >> versions.txt
-
-      - name: Commit version changes
-        if: steps.get-releases.outputs.cromite_version != steps.get-releases.outputs.cromite_prev || steps.get-releases.outputs.chromext_version != steps.get-releases.outputs.chromext_prev || steps.get-releases.outputs.lspatch_version != steps.get-releases.outputs.lspatch_prev
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add versions.txt
-          git commit -m "Update versions"
-          git push
+          files: artifacts/x64_ChromePublic-patched.apk
+          name: "Auto-processed Release ${{ github.sha }}"
+          tag_name: "release-${{ github.sha }}"
+          body: |
+            Automatically processed release combining:
+            - Cromite APK
+            - ChromeXt
+            - LSPatch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
