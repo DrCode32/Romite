@@ -23,7 +23,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-- name: Download Assets and Patch
+      - name: Download Assets and Patch
         run: |
           REPO="${GITHUB_REPOSITORY}"
           RELEASE_TAG="$GITHUB_EVENT_RELEASE_TAG_NAME"
