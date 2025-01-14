@@ -65,10 +65,13 @@ jobs:
         run: |
           cd work_dir
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
-          # Find the output APK with the correct pattern
-          OUTPUT_APK=$(find . -name "*-lspatched.apk")
+          # List all files to see the actual output
+          echo "Directory contents:"
+          ls -la
+          # Try to find any APK file that was modified recently
+          OUTPUT_APK=$(find . -name "*.apk" -mmin -1 ! -name "x64_ChromePublic.apk" ! -name "ChromeXt-signed.apk")
           if [ -z "$OUTPUT_APK" ]; then
-            echo "Error: Could not find lspatched APK file"
+            echo "Error: Could not find the processed APK file"
             exit 1
           fi
           # Remove the "./" prefix from the path if it exists
