@@ -5,138 +5,64 @@ on:
     - cron: '0 */6 * * *'  # Run every 6 hours
   workflow_dispatch:
   
-permissions:
-  contents: write  # This covers both repository contents and releases
-
 jobs:
   check-releases-and-process:
     runs-on: ubuntu-latest
-    
     env:
-      REPOS: |
-        {
-          "cromite": {"repo": "uazo/cromite", "file": "x64_ChromePublic.apk"},
-          "chromext": {"repo": "JingMatrix/ChromeXt", "file": "ChromeXt-signed.apk"},
-          "lspatch": {"repo": "JingMatrix/LSPatch", "file": "lspatch.jar"}
-        }
-      OUTPUT_APK: output.apk
+      CROMITE_REPO: 'uazo/cromite'
+      CHROMEXT_REPO: 'JingMatrix/ChromeXt'
+      LSPATCH_REPO: 'JingMatrix/LSPatch'
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
-        
-      - name: Set Up Java
-        uses: actions/setup-java@v4
+        uses: actions/checkout@v3
+
+      - name: Set Up Java 21
+        uses: actions/setup-java@v3
         with:
           java-version: '21'
-          distribution: 'temurin'
+          distribution: 'adopt'
 
-      - name: Initialize and Get Previous Release Info
-        id: prev_info
+      - name: Initialize Variables
         run: |
-          # Create release_info.json if it doesn't exist
-          [ ! -f release_info.json ] && echo '{}' > release_info.json
-          
-          # Read previous info into variables
-          echo "prev_info=$(cat release_info.json)" >> $GITHUB_OUTPUT
+          echo "CROMITE_TAG=$(gh release list -R $CROMITE_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
+          echo "CHROMEXT_TAG=$(gh release list -R $CHROMEXT_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
+          echo "LSPATCH_TAG=$(gh release list -R $LSPATCH_REPO --limit=1 --json tagName -q '.[0].tagName')" >> $GITHUB_ENV
 
-      - name: Check Latest Releases and Download Assets
-        id: releases
+      - name: Check for New Releases
+        id: check_releases
         run: |
-          download_if_new() {
-            local name=$1
-            local repo=$2
-            local file=$3
-            local prev_tag=$(echo '${{ steps.prev_info.outputs.prev_info }}' | jq -r --arg n "$name" '.[$n] // empty')
-            
-            # Get latest release info
-            local response=$(curl -sL "https://api.github.com/repos/$repo/releases/latest")
-            local tag_name=$(echo $response | jq -r '.tag_name')
-            
-            if [[ $tag_name != "null" && $tag_name != $prev_tag ]]; then
-              local url=$(echo $response | jq -r --arg f "$file" '.assets[] | select(.name==$f) | .browser_download_url')
-              if [[ -n $url ]]; then
-                echo "Downloading $file from $name release"
-                curl -sLO "$url"
-                echo "${name}_tag=$tag_name" >> $GITHUB_OUTPUT
-                return 0
-              fi
-            fi
-            echo "${name}_tag=$prev_tag" >> $GITHUB_OUTPUT
-            return 1
-          }
-          
-          # Process each repository
-          updated=false
-          while IFS="=" read -r name data; do
-            repo=$(echo "$data" | jq -r '.repo')
-            file=$(echo "$data" | jq -r '.file')
-            download_if_new "$name" "$repo" "$file" && updated=true
-          done < <(echo "$REPOS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"')
-          
-          # Set flag if any updates were found
-          echo "updated=$updated" >> $GITHUB_OUTPUT
+          # Check if there's a new release since the last run
+          # For demonstration, assume we're checking against the last stored tag
+          # In practice, you'd need to store the last checked tag, e.g., in a file
+          echo "No new releases" # Replace with actual logic
 
-      - name: Process APK
-        if: steps.releases.outputs.updated == 'true'
+      - name: Download Assets
+        if: steps.check_releases.outputs.new_release == 'true'
         run: |
-          if [ -f "x64_ChromePublic.apk" ] && [ -f "ChromeXt-signed.apk" ] && [ -f "lspatch.jar" ]; then
-            java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex -o output.apk
-          else
-            echo "Missing required files"
-            exit 1
-          fi
+          # Download the assets from the new releases
+          # Replace with actual download commands
 
-      - name: Create and Upload Release
-        if: steps.releases.outputs.updated == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Process APK with lspatch.jar
+        if: steps.check_releases.outputs.new_release == 'true'
         run: |
-          # Create release
-          timestamp=$(date -u +%Y%m%d-%H%M%S)
-          release_json=$(jq -n \
-            --arg tag "v1.0.0-$timestamp" \
-            --arg name "Release v1.0.0-$timestamp" \
-            --arg cromite "${{ steps.releases.outputs.cromite_tag }}" \
-            --arg chromext "${{ steps.releases.outputs.chromext_tag }}" \
-            --arg lspatch "${{ steps.releases.outputs.lspatch_tag }}" \
-            '{
-              tag_name: $tag,
-              name: $name,
-              body: "Release created with:\nCromite: \($cromite)\nChromeXt: \($chromext)\nLSPatch: \($lspatch)"
-            }')
-          
-          release_response=$(curl -sL \
-            -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -d "$release_json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases")
-          
-          # Upload asset
-          upload_url=$(echo "$release_response" | jq -r '.upload_url' | sed 's/{?name,label}//')
-          curl -sL \
-            -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary "@output.apk" \
-            "${upload_url}?name=output.apk"
+          java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
 
-      - name: Update Release Info
-        if: steps.releases.outputs.updated == 'true'
-        run: |
-          jq -n \
-            --arg cromite "${{ steps.releases.outputs.cromite_tag }}" \
-            --arg chromext "${{ steps.releases.outputs.chromext_tag }}" \
-            --arg lspatch "${{ steps.releases.outputs.lspatch_tag }}" \
-            '{
-              cromite: $cromite,
-              chromext: $chromext,
-              lspatch: $lspatch
-            }' > release_info.json
-          
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add release_info.json
-          git commit -m "Update release info [skip ci]"
-          git push
+      - name: Upload Output APK to Release
+        if: steps.check_releases.outputs.new_release == 'true'
+        uses: actions/upload-release-asset@v3
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: output.apk
+          asset_name: processed.apk
+          asset_content_type: application/octet-stream
+
+      - name: Create Release
+        if: steps.check_releases.outputs.new_release == 'true'
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ env.CROMITE_TAG }}
+          release_name: Release ${{ env.CROMITE_TAG }}
+          draft: false
+          prerelease: false
