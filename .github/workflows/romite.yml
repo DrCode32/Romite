@@ -2,25 +2,22 @@ name: Monitor Repositories and Process Releases
 
 on:
   schedule:
-    - cron: '0 * * * *' # Runs every hour
-  workflow_dispatch: # Allow manual triggers
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   monitor_and_process:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout this repository (to potentially publish the result later)
       - name: Checkout release repository
         uses: actions/checkout@v3
 
-      # Set up Java for running the command
       - name: Set up Java
         uses: actions/setup-java@v3
         with:
-          java-version: '21' # Adjust Java version as needed
+          java-version: '21'
 
-      # Monitor the repositories for new releases
       - name: Monitor Repositories
         id: check_releases
         run: |
@@ -40,27 +37,22 @@ jobs:
             releases=$(curl -s "https://api.github.com/repos/$repo/releases")
             for file in "${required_files[@]}"; do
               if echo "$releases" | jq -e '.[] | .assets[] | select(.name == "'"$file"'")' > /dev/null; then
-                echo "New version of $file found in $repo"
                 new_files+="$file:$repo\n"
               fi
             done
           done
 
           if [ -z "$new_files" ]; then
-            echo "No new files detected."
             echo "new_files=false" >> $GITHUB_ENV
           else
-            echo "New files detected: $new_files"
             echo "new_files=true" >> $GITHUB_ENV
             echo "$new_files" > new_files_list.txt
           fi
 
-      # Exit if no new files are detected
       - name: Check if processing is needed
         if: env.new_files == 'false'
         run: echo "No new files to process. Exiting..."
 
-      # Download the files and run the command
       - name: Download and Process Files
         if: env.new_files == 'true'
         run: |
@@ -72,15 +64,13 @@ jobs:
             curl -L -o "$file" "$url"
           done < new_files_list.txt
 
-          # Run the provided command
           java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex
 
-      # Publish the results to the release repository
       - name: Publish to Release Repository
         if: env.new_files == 'true'
         run: |
           mkdir -p release-output
-          mv patched-apk.apk release-output/ # Replace with the actual output file name
+          mv patched-apk.apk release-output/
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add release-output/
