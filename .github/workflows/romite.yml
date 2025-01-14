@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
   
 permissions:
-  repo: write
+  contents: write
+  releases: write
 
 jobs:
   check-releases-and-process:
