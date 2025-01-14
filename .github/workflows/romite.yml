@@ -81,7 +81,7 @@ jobs:
         if: steps.releases.outputs.updated == 'true'
         run: |
           if [ -f "x64_ChromePublic.apk" ] && [ -f "ChromeXt-signed.apk" ] && [ -f "lspatch.jar" ]; then
-            java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex -o ${{ env.OUTPUT_APK }}
+            java -jar lspatch.jar x64_ChromePublic.apk -d -v -m ChromeXt-signed.apk --force --injectdex -o output.apk
           else
             echo "Missing required files"
             exit 1
@@ -110,8 +110,8 @@ jobs:
             -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/octet-stream" \
-            --data-binary "@${{ env.OUTPUT_APK }}" \
-            "${upload_url}?name=${{ env.OUTPUT_APK }}"
+            --data-binary "@output.apk" \
+            "${upload_url}?name=output.apk"
 
       - name: Update Release Info
         if: steps.releases.outputs.updated == 'true'
